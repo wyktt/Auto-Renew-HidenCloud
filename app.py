@@ -224,8 +224,8 @@ def renew_service(page):
         handle_cloudflare(page)
 
         log("🖱️ 准备点击 'Renew' 按钮...")
-        renew_btn = page.locator('button:has-text("Renew")')
-        create_btn = page.locator('button:has-text("Create Invoice")')
+        renew_btn = page.locator('button:has-text("Renew")').first
+        create_btn = page.locator('button:has-text("Create Invoice"), button:has-text("Invoice"), button[type="submit"]:visible')
 
         modal_opened = False
         for i in range(3):
@@ -233,24 +233,44 @@ def renew_service(page):
                 renew_btn.wait_for(state="visible", timeout=10000)
                 renew_btn.scroll_into_view_if_needed()
                 log(f"🖱️ 第 {i+1} 次尝试点击 'Renew'...")
-                renew_btn.click()
+                renew_btn.click(force=True)
 
-                # 等待一小段时间，检测是否出现“未到续期时间”弹窗
+                # 等待并优先处理可能出现的 Cloudflare 拦截
                 time.sleep(2)
+                handle_cloudflare(page)
+
+                # 打印当前弹出的内容或页面提示
                 page_text = page.locator("body").inner_text()
-                if "Renewal Restricted" in page_text or "can only renew" in page_text.lower():
+                modals = page.locator('.modal:visible, [role="dialog"]:visible, .swal2-popup:visible')
+                if modals.count() > 0:
+                    log(f"📋 检测到弹窗内容: {modals.first.inner_text().strip()[:200]}")
+
+                # 检测是否出现“未到续期时间”弹窗
+                body_lower = page_text.lower()
+                restricted_keywords = [
+                    "renewal restricted", "can only renew", "cannot renew",
+                    "already renewed", "not eligible", "too early", "not yet"
+                ]
+                if any(kw in body_lower for kw in restricted_keywords):
                     log("⚠️ 未到续期时间，无法续期。")
                     page.screenshot(path="renew_not_allowed.png")
                     return "NOT_TIME"   # 特殊状态
 
-                log("🖲️ 等待弹窗出现...")
+                log("🖲️ 等待续费按钮出现...")
+                # 打印当前可见的按钮名称供排查
                 try:
-                    create_btn.wait_for(state="visible", timeout=5000)
+                    vis_btns = [b.inner_text().strip() for b in page.locator("button:visible").all()]
+                    log(f"🔎 当前可见按钮: {vis_btns}")
+                except:
+                    pass
+
+                try:
+                    create_btn.first.wait_for(state="visible", timeout=8000)
                     modal_opened = True
-                    log("✅ 弹窗已成功弹出！")
+                    log("✅ 弹窗/续费发票按钮已成功出现！")
                     break
                 except:
-                    log("⚠️ 弹窗未出现，可能是点击未响应，准备重试...")
+                    log("⚠️ 续费发票按钮未出现，可能是点击未响应或在加载中，准备重试...")
                     time.sleep(2)
             except Exception as e:
                 log(f"❌ 点击尝试出错: {e}")
@@ -258,11 +278,16 @@ def renew_service(page):
         if not modal_opened:
             log("❌ 错误：尝试多次后，续费弹窗仍未出现。")
             page.screenshot(path="renew_modal_failed.png")
+            try:
+                with open("renew_modal_failed.html", "w", encoding="utf-8") as f:
+                    f.write(page.content())
+            except:
+                pass
             return False
 
         handle_cloudflare(page)
         log("🖱️ 点击 'Create Invoice'...")
-        create_btn.click()
+        create_btn.first.click(force=True)
 
         new_invoice_url = None
         start_wait = time.time()
